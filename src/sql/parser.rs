@@ -13,6 +13,7 @@ impl Parser {
         Ok(statements)
     }
 
+    #[allow(dead_code)]
     pub fn parse_one(sql: &str) -> Result<Statement> {
         let mut statements = Self::parse_sql(sql)?;
         if statements.len() != 1 {

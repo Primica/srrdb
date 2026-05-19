@@ -8,4 +8,5 @@ pub use error::Error;
 pub use parser::Parser;
 pub use tokenizer::Tokenizer;
 
+#[allow(dead_code)]
 pub type Result<T> = error::Result<T>;

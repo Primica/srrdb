@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 sqlparser = "0.55"
+rustyline = "15"
+colored = "3"
