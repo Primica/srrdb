@@ -284,8 +284,30 @@ async fn test_all_features() {
         .unwrap();
     conn.query_drop("DROP DATABASE blogtest").await.unwrap();
 
-    // Switch back to srrdb for cleanup
+    // Switch back to srrdb for remaining tests
     conn.query_drop("USE srrdb").await.unwrap();
 
+    // ===== Auto-increment and default values =====
+    conn.query_drop("CREATE TABLE blog (id INT AUTO_INCREMENT, title TEXT, created DATETIME DEFAULT NOW())")
+        .await
+        .unwrap();
+    conn.query_drop("INSERT INTO blog (title) VALUES ('First')").await.unwrap();
+    conn.query_drop("INSERT INTO blog (title) VALUES ('Second')").await.unwrap();
+
+    let rows: Vec<(i32, String, String)> = conn
+        .query("SELECT id, title, created FROM blog ORDER BY id")
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].0, 1);
+    assert_eq!(rows[0].1, "First");
+    assert_eq!(rows[1].0, 2);
+    assert_eq!(rows[1].1, "Second");
+    // created should be a non-empty timestamp string
+    assert!(!rows[0].2.is_empty());
+    assert!(!rows[1].2.is_empty());
+
+    // Switch back to srrdb for cleanup and remaining tests
+    conn.query_drop("USE srrdb").await.unwrap();
     drop(conn);
 }

@@ -1,18 +1,21 @@
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use sqlparser::ast::{
-    AssignmentTarget, BinaryOperator, DataType, Expr, FromTable, Ident, ObjectName,
-    ObjectNamePart, ObjectType, OrderByExpr, Query, SelectItem, SetExpr, Statement,
-    TableFactor, Value as SqlValue,
+    AssignmentTarget, BinaryOperator, ColumnOption, DataType, Expr, FromTable, Ident,
+    ObjectName, ObjectNamePart, ObjectType, OrderByExpr, Query, SelectItem, SetExpr,
+    Statement, TableFactor, Value as SqlValue,
 };
 use sqlparser::ast::Use as SqlUse;
+use sqlparser::keywords::Keyword;
+use sqlparser::tokenizer::Token;
 use tracing::{error, info};
 
 use crate::engine::catalog::Catalog;
 use crate::engine::persistence::Persistence;
 use crate::engine::storage::{Row, Storage};
-use crate::engine::types::{Column, ColumnType, Value};
+use crate::engine::types::{Column, ColumnType, DefaultExpr, Value};
 use crate::engine::wal::{Wal, WalEntry};
 
 #[derive(Debug)]
@@ -190,7 +193,22 @@ impl Executor {
             .iter()
             .map(|col| {
                 let col_type = sql_type_to_column_type(&col.data_type);
-                Column::new(&col.name.value, &table_name, col_type)
+                let mut c = Column::new(&col.name.value, &table_name, col_type);
+                for opt in &col.options {
+                    match &opt.option {
+                        ColumnOption::DialectSpecific(tokens) => {
+                            if tokens.iter().any(|t| matches!(t, Token::Word(w) if w.keyword == Keyword::AUTO_INCREMENT))
+                            {
+                                c.auto_increment = true;
+                            }
+                        }
+                        ColumnOption::Default(expr) => {
+                            c.default_expr = parse_default_expr(expr);
+                        }
+                        _ => {}
+                    }
+                }
+                c
             })
             .collect();
 
@@ -222,7 +240,7 @@ impl Executor {
             .as_ref()
             .ok_or_else(|| "INSERT missing source".to_string())?;
 
-        let rows = match &*query.body {
+        let mut rows = match &*query.body {
             SetExpr::Values(values) => {
                 let mut result = Vec::new();
                 for row in &values.rows {
@@ -253,7 +271,22 @@ impl Executor {
 
         let row_count = rows.len() as u64;
         let mut catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
-        let first_id = catalog.next_row_id(table_name, row_count);
+
+        // Fill auto-increment and default values
+        let mut last_insert_id = 0u64;
+        for row in &mut rows {
+            for (idx, col) in table_def.columns.iter().enumerate() {
+                if matches!(row.values[idx], Value::Null) {
+                    if col.auto_increment {
+                        let id = catalog.next_row_id(table_name, 1);
+                        row.values[idx] = Value::Int(id as i64);
+                        last_insert_id = id;
+                    } else if let Some(ref expr) = col.default_expr {
+                        row.values[idx] = eval_default_expr(expr);
+                    }
+                }
+            }
+        }
         drop(catalog);
 
         let wal_entry = WalEntry::InsertRows {
@@ -270,7 +303,7 @@ impl Executor {
         info!("Inserted {row_count} rows into {table_name}");
         Ok(ExecuteResult::Affected {
             rows: row_count,
-            last_insert_id: first_id,
+            last_insert_id,
         })
     }
 
@@ -932,4 +965,68 @@ fn like_match_impl(text: &str, pattern: &str) -> bool {
         }
     }
     ti == t.len()
+}
+
+fn parse_default_expr(expr: &Expr) -> Option<DefaultExpr> {
+    match expr {
+        Expr::Value(_) => Some(DefaultExpr::Value(sql_expr_to_value(expr))),
+        Expr::Function(f) => {
+            let name = f.name.to_string();
+            if name.eq_ignore_ascii_case("now") || name.eq_ignore_ascii_case("current_timestamp") {
+                Some(DefaultExpr::CurrentTimestamp)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn eval_default_expr(expr: &DefaultExpr) -> Value {
+    match expr {
+        DefaultExpr::Value(v) => v.clone(),
+        DefaultExpr::CurrentTimestamp => format_timestamp(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        ),
+    }
+}
+
+fn format_timestamp(secs: u64) -> Value {
+    let days = secs / 86400;
+    let time_secs = secs % 86400;
+    let mut y = 1970i64;
+    let mut d = days as i64;
+    loop {
+        let year_days = if is_leap(y) { 366 } else { 365 };
+        if d < year_days {
+            break;
+        }
+        d -= year_days;
+        y += 1;
+    }
+    let month_days: &[i64] = if is_leap(y) {
+        &[31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        &[31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+    let mut m = 0i64;
+    for (i, &md) in month_days.iter().enumerate() {
+        if d < md {
+            m = i as i64 + 1;
+            break;
+        }
+        d -= md;
+    }
+    let day = d + 1;
+    let h = (time_secs / 3600) as i64;
+    let mi = ((time_secs % 3600) / 60) as i64;
+    let s = (time_secs % 60) as i64;
+    Value::Text(format!("{y:04}-{m:02}-{day:02} {h:02}:{mi:02}:{s:02}"))
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }

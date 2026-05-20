@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DefaultExpr {
+    Value(Value),
+    CurrentTimestamp,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Value {
     Null,
     Int(i64),
@@ -104,6 +110,10 @@ pub struct Column {
     pub charset: u16,
     pub flags: u16,
     pub decimals: u8,
+    #[serde(default)]
+    pub auto_increment: bool,
+    #[serde(default)]
+    pub default_expr: Option<DefaultExpr>,
 }
 
 impl Column {
@@ -117,6 +127,8 @@ impl Column {
             charset: 45, // utf8mb4_general_ci
             flags: 0,
             decimals: 0,
+            auto_increment: false,
+            default_expr: None,
         }
     }
 }
