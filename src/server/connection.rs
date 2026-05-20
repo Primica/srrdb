@@ -63,7 +63,7 @@ pub async fn handle_connection(
         }
     };
 
-    let session = Session::new_with_user(user);
+    let mut session = Session::new_with_user(user);
 
     write_packet(&mut stream, 2, &ok_payload(0, 0, SERVER_STATUS_AUTOCOMMIT)).await?;
 
@@ -100,13 +100,19 @@ pub async fn handle_connection(
             }
             Command::InitDb(db) => {
                 debug!("InitDb: {db}");
-                let p = ok_payload(0, 0, SERVER_STATUS_AUTOCOMMIT);
-                write_packet(&mut stream, seq, &p).await?;
+                if executor.database_exists(&db) {
+                    session.database = db;
+                    let p = ok_payload(0, 0, SERVER_STATUS_AUTOCOMMIT);
+                    write_packet(&mut stream, seq, &p).await?;
+                } else {
+                    let p = err_payload(1049, &format!("Unknown database"));
+                    write_packet(&mut stream, seq, &p).await?;
+                }
                 seq = seq.wrapping_add(1);
             }
             Command::Query(sql) => {
                 debug!("Query: {sql}");
-                match handle_query(&mut stream, &mut seq, &executor, &session.database, &sql).await {
+                match handle_query(&mut stream, &mut seq, &executor, &mut session, &sql).await {
                     Ok(()) => {}
                     Err(e) => {
                         error!("Query error: {e}");
@@ -138,7 +144,7 @@ async fn handle_query(
     stream: &mut TcpStream,
     seq: &mut u8,
     executor: &Executor,
-    db: &str,
+    session: &mut Session,
     sql: &str,
 ) -> std::result::Result<(), String> {
     let statements =
@@ -153,7 +159,7 @@ async fn handle_query(
     }
 
     for statement in &statements {
-        let result = executor.execute(db, statement)?;
+        let result = executor.execute(&session.database, statement)?;
 
         match result {
             ExecuteResult::Rows { columns, rows } => {
@@ -189,6 +195,12 @@ async fn handle_query(
             }
             ExecuteResult::Affected { rows, last_insert_id } => {
                 let p = ok_payload(rows, last_insert_id, SERVER_STATUS_AUTOCOMMIT);
+                write_packet(stream, *seq, &p).await.map_err(|e| format!("{e}"))?;
+                *seq = seq.wrapping_add(1);
+            }
+            ExecuteResult::DatabaseChanged(new_db) => {
+                session.database = new_db.clone();
+                let p = ok_payload(0, 0, SERVER_STATUS_AUTOCOMMIT);
                 write_packet(stream, *seq, &p).await.map_err(|e| format!("{e}"))?;
                 *seq = seq.wrapping_add(1);
             }

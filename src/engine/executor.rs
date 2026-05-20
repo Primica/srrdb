@@ -6,6 +6,7 @@ use sqlparser::ast::{
     ObjectNamePart, ObjectType, OrderByExpr, Query, SelectItem, SetExpr, Statement,
     TableFactor, Value as SqlValue,
 };
+use sqlparser::ast::Use as SqlUse;
 use tracing::{error, info};
 
 use crate::engine::catalog::Catalog;
@@ -24,6 +25,7 @@ pub enum ExecuteResult {
         rows: u64,
         last_insert_id: u64,
     },
+    DatabaseChanged(String),
     Ok,
 }
 
@@ -103,6 +105,12 @@ impl Executor {
                 }
                 self.execute_drop_table(db, &table)
             }
+            Statement::CreateDatabase { db_name, .. } => {
+                self.execute_create_database(db_name)
+            }
+            Statement::ShowDatabases { .. } => self.execute_show_databases(),
+            Statement::ShowTables { .. } => self.execute_show_tables(db),
+            Statement::Use(use_stmt) => self.execute_use(use_stmt),
             _ => Err(format!("Unsupported statement")),
         }
     }
@@ -441,6 +449,12 @@ impl Executor {
             .unwrap_or(false)
     }
 
+    pub fn database_exists(&self, db_name: &str) -> bool {
+        self.catalog.lock()
+            .map(|c| c.databases.contains_key(db_name))
+            .unwrap_or(false)
+    }
+
     fn execute_drop_table(&self, db: &str, table_name: &str) -> Result<ExecuteResult, String> {
         let wal_entry = WalEntry::DropTable {
             table_name: table_name.to_string(),
@@ -461,6 +475,66 @@ impl Executor {
 
         info!("Dropped table {table_name}");
         Ok(ExecuteResult::Ok)
+    }
+
+    fn execute_create_database(&self, db_name: &ObjectName) -> Result<ExecuteResult, String> {
+        let name = name_to_string(db_name);
+        let mut catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
+        catalog.create_database(&name);
+        drop(catalog);
+        self.save();
+        info!("Created database {name}");
+        Ok(ExecuteResult::Ok)
+    }
+
+    fn execute_show_tables(&self, db: &str) -> Result<ExecuteResult, String> {
+        let catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let db_def = catalog.databases.get(db)
+            .ok_or_else(|| format!("Unknown database: {db}"))?;
+        let mut names: Vec<String> = db_def.tables.keys().cloned().collect();
+        names.sort();
+        let column = Column::new(&format!("Tables_in_{db}"), "", ColumnType::VarChar);
+        let rows: Vec<Row> = names
+            .into_iter()
+            .map(|name| Row {
+                values: vec![Value::Text(name)],
+            })
+            .collect();
+        Ok(ExecuteResult::Rows {
+            columns: vec![column],
+            rows,
+        })
+    }
+
+    fn execute_show_databases(&self) -> Result<ExecuteResult, String> {
+        let catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let mut names: Vec<String> = catalog.databases.keys().cloned().collect();
+        names.sort();
+        let column = Column::new("Database", "", ColumnType::VarChar);
+        let rows: Vec<Row> = names
+            .into_iter()
+            .map(|name| Row {
+                values: vec![Value::Text(name)],
+            })
+            .collect();
+        Ok(ExecuteResult::Rows {
+            columns: vec![column],
+            rows,
+        })
+    }
+
+    fn execute_use(&self, use_stmt: &SqlUse) -> Result<ExecuteResult, String> {
+        let db_name = match use_stmt {
+            SqlUse::Database(name) | SqlUse::Object(name) => name_to_string(name),
+            _ => return Err("USE only supports database switching".into()),
+        };
+
+        let catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
+        if !catalog.databases.contains_key(&db_name) {
+            return Err(format!("Unknown database: {db_name}"));
+        }
+
+        Ok(ExecuteResult::DatabaseChanged(db_name))
     }
 }
 

@@ -73,8 +73,7 @@ fn parse_server_handshake(payload: &[u8]) -> Result<ServerHandshake, String> {
                 .iter()
                 .position(|&b| b == 0)
                 .unwrap_or(payload.len() - pos);
-            let s = String::from_utf8(payload[pos..pos + end].to_vec()).ok();
-            s
+            String::from_utf8(payload[pos..pos + end].to_vec()).ok()
         } else {
             None
         }
@@ -422,6 +421,28 @@ pub async fn run_client(
                     || trimmed.eq_ignore_ascii_case("\\q")
                 {
                     break;
+                }
+
+                if let Some(path) = trimmed.strip_prefix("source ") {
+                    if !multi_line_buf.is_empty() {
+                        multi_line_buf.clear();
+                    }
+                    let path = path.trim().trim_end_matches(';').trim_matches('"').trim_matches('\'');
+                    match std::fs::read_to_string(path) {
+                        Ok(content) => {
+                            for statement in content.split(';') {
+                                let stmt = statement.trim();
+                                if !stmt.is_empty() {
+                                    match execute_query(&mut stream, stmt).await {
+                                        Ok(result) => format_result(&result),
+                                        Err(e) => println!("Error: {}", e),
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => println!("Error reading file '{}': {}", path, e),
+                    }
+                    continue;
                 }
 
                 if trimmed.is_empty() && !multi_line_buf.is_empty() {
