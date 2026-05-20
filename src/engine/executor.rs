@@ -105,6 +105,18 @@ impl Executor {
                 }
                 self.execute_drop_table(db, &table)
             }
+            Statement::Drop {
+                object_type,
+                names,
+                if_exists,
+                ..
+            } if *object_type == ObjectType::Database => {
+                let db_name = names.first().map(name_to_string).unwrap_or_default();
+                if *if_exists && !self.database_exists(&db_name) {
+                    return Ok(ExecuteResult::Ok);
+                }
+                self.execute_drop_database(&db_name)
+            }
             Statement::CreateDatabase { db_name, .. } => {
                 self.execute_create_database(db_name)
             }
@@ -484,6 +496,16 @@ impl Executor {
         drop(catalog);
         self.save();
         info!("Created database {name}");
+        Ok(ExecuteResult::Ok)
+    }
+
+    fn execute_drop_database(&self, db_name: &str) -> Result<ExecuteResult, String> {
+        let mut catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
+        catalog.databases.remove(db_name)
+            .ok_or_else(|| format!("Unknown database: {db_name}"))?;
+        drop(catalog);
+        self.save();
+        info!("Dropped database {db_name}");
         Ok(ExecuteResult::Ok)
     }
 

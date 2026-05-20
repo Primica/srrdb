@@ -22,9 +22,11 @@ authentication, and on-disk persistence — no MySQL dependency.
 - Built-in MySQL wire protocol client (`--client` flag)
 - Interactive REPL for in-process testing
 - Concurrent connections via Tokio async
-- Full SQL support: CREATE TABLE, INSERT, SELECT, DELETE, UPDATE, DROP TABLE
+- Full SQL support: CREATE/DROP TABLE, CREATE/DROP DATABASE, INSERT, SELECT, DELETE, UPDATE, USE, SHOW
 - WHERE with comparison operators, AND/OR, LIKE, BETWEEN, IN, IS NULL
 - ORDER BY (ASC/DESC), LIMIT, OFFSET
+- Database management: CREATE DATABASE, DROP DATABASE, USE, SHOW DATABASES, SHOW TABLES
+- Client-side `source <path>` command to execute SQL files
 
 ## Requirements
 
@@ -129,7 +131,20 @@ cargo run --release -- --client -H 192.168.1.10 -P 3307 -u admin -p secret
 mysql -h 127.0.0.1 -P 3307 -u root srrdb
 ```
 
+The client also supports `source <path>` to execute SQL from a file:
+```bash
+echo "source /path/to/script.sql;" | cargo run --release -- --client
+```
+
 ## Supported SQL
+
+### Database Management
+
+- `CREATE DATABASE <name>`
+- `DROP DATABASE <name>` / `DROP DATABASE IF EXISTS <name>`
+- `USE <name>` / `USE DATABASE <name>`
+- `SHOW DATABASES`
+- `SHOW TABLES`
 
 ### Data Definition
 
