@@ -41,6 +41,15 @@ pub struct CliArgs {
 
     #[arg(long)]
     pub repl: bool,
+
+    #[arg(long)]
+    pub client: bool,
+
+    #[arg(short = 'u', long)]
+    pub user: Option<String>,
+
+    #[arg(short = 'p', long)]
+    pub password: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +59,9 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub log_level: String,
     pub default_password: Option<String>,
+    pub client: bool,
+    pub user: String,
+    pub password: String,
 }
 
 impl Config {
@@ -62,6 +74,9 @@ impl Config {
             data_dir: PathBuf::from(DEFAULT_DATA_DIR),
             log_level: DEFAULT_LOG_LEVEL.to_string(),
             default_password: None,
+            client: args.client,
+            user: args.user.clone().unwrap_or_else(|| "root".to_string()),
+            password: args.password.clone().unwrap_or_default(),
         };
 
         if let Some(config_path) = &args.config {

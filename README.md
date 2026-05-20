@@ -19,7 +19,8 @@ authentication, and on-disk persistence — no MySQL dependency.
 - Config file (TOML) + CLI arguments via clap
 - Structured logging via `tracing`
 - Text protocol queries (COM_QUERY)
-- Interactive REPL for testing
+- Built-in MySQL wire protocol client (`--client` flag)
+- Interactive REPL for in-process testing
 - Concurrent connections via Tokio async
 - Full SQL support: CREATE TABLE, INSERT, SELECT, DELETE, UPDATE, DROP TABLE
 - WHERE with comparison operators, AND/OR, LIKE, BETWEEN, IN, IS NULL
@@ -29,7 +30,7 @@ authentication, and on-disk persistence — no MySQL dependency.
 
 - **Rust** 1.75+ (edition 2024)
 - **Cargo** (included with Rust)
-- A MySQL client for testing (`mysql` CLI, `mysql_async`, etc.)
+- No external dependencies — the binary includes both server and client
 
 ## Installation
 
@@ -46,13 +47,13 @@ The binary will be at `target/release/srrdb`.
 ### Quick start
 
 ```bash
-# Start the server (default: 127.0.0.1:3307)
+# Terminal 1: Start the server (default: 127.0.0.1:3307)
 cargo run --release
 
-# In another terminal, connect with MySQL client
-mysql -h 127.0.0.1 -P 3307 -u root srrdb
+# Terminal 2: Connect with the built-in client (no MySQL needed)
+cargo run --release -- --client
 
-# Or use the interactive REPL
+# Or use the interactive REPL (in-process, no network)
 cargo run --release -- --repl
 ```
 
@@ -77,12 +78,15 @@ Usage: srrdb [OPTIONS]
 
 Options:
   -c, --config <CONFIG>              Config file path (TOML)
-  -H, --host <HOST>                  Bind address
-  -P, --port <PORT>                  Bind port
+  -H, --host <HOST>                  Server bind address or client connect host
+  -P, --port <PORT>                  Server bind port or client connect port
       --data-dir <DATA_DIR>          Data directory for persistence
       --log-level <LOG_LEVEL>        Log level (trace, debug, info, warn, error)
       --default-password <PASSWORD>  Default password for all users
-      --repl                         Start interactive REPL
+      --repl                         Start interactive REPL (in-process)
+      --client                       Start interactive client (network)
+  -u, --user <USER>                  Client username (default: root)
+  -p, --password <PASSWORD>          Client password
   -h, --help                         Print help
   -V, --version                      Print version
 ```
@@ -112,15 +116,17 @@ The REPL supports multi-line input (semicolon-terminated), command history, and 
 - `.tokens <sql>` — Show tokenized output
 - `.ast <sql>` — Show parsed AST
 
-### Connect with a MySQL client
+### Connect with the built-in client
 
 ```bash
+# Default: connect to 127.0.0.1:3307 as root
+cargo run --release -- --client
+
+# Custom connection
+cargo run --release -- --client -H 192.168.1.10 -P 3307 -u admin -p secret
+
+# Or using a MySQL client (if you have one installed)
 mysql -h 127.0.0.1 -P 3307 -u root srrdb
-```
-
-If a `default_password` is set, use `-p`:
-```bash
-mysql -h 127.0.0.1 -P 3307 -u root -p srrdb
 ```
 
 ## Supported SQL
@@ -168,12 +174,13 @@ then takes a fresh checkpoint (saves full state + truncates WAL).
 src/
   config.rs   Configuration file + CLI argument parsing
   lib.rs      Library root (re-exports all modules)
-  main.rs     Binary entry point (server or REPL)
+  main.rs     Binary entry point (server, client, or REPL)
   sql/        SQL lexer and parser (wraps sqlparser-rs)
   engine/     Catalog, storage, persistence, WAL, query executor
   protocol/   MySQL wire protocol (framing, handshake, auth, commands, results)
   server/     TCP listener and per-connection handler
-  repl/       Interactive REPL for testing
+  client.rs   Built-in MySQL wire protocol client (no external dependencies)
+  repl/       Interactive REPL for in-process testing
   tests/      Integration tests
 ```
 

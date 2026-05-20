@@ -365,6 +365,7 @@ impl Executor {
                     .projection
                     .iter()
                     .flat_map(|item| match item {
+                        SelectItem::Wildcard(_) => table_columns.clone(),
                         SelectItem::UnnamedExpr(Expr::Wildcard(_)) => table_columns.clone(),
                         SelectItem::UnnamedExpr(Expr::Identifier(id)) => {
                             vec![find_column(&table_columns, &id.value)]
@@ -541,6 +542,7 @@ fn project_row(
     projection
         .iter()
         .flat_map(|item| match item {
+            SelectItem::Wildcard(_) => values.to_vec(),
             SelectItem::UnnamedExpr(Expr::Wildcard(_)) => values.to_vec(),
             SelectItem::UnnamedExpr(Expr::Identifier(id)) => {
                 let idx = table_columns
