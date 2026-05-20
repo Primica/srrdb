@@ -228,5 +228,64 @@ async fn test_all_features() {
         .unwrap();
     assert_eq!(rows.len(), 5);
 
+    // ===== INSERT with column list =====
+    conn.query_drop("DROP TABLE IF EXISTS coltest").await.unwrap();
+    conn.query_drop("CREATE TABLE coltest (id INT, name TEXT, price DOUBLE)")
+        .await
+        .unwrap();
+
+    conn.query_drop("INSERT INTO coltest (name, id) VALUES ('Bob', 2)")
+        .await
+        .unwrap();
+    conn.query_drop("INSERT INTO coltest (name, id, price) VALUES ('Alice', 1, 9.99)")
+        .await
+        .unwrap();
+
+    let rows: Vec<(i32, Option<String>, Option<f64>)> = conn
+        .query("SELECT id, name, price FROM coltest ORDER BY id")
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0], (1, Some("Alice".to_string()), Some(9.99)));
+    assert_eq!(rows[1], (2, Some("Bob".to_string()), None));
+
+    // ===== CREATE TABLE IF NOT EXISTS =====
+    conn.query_drop("CREATE TABLE IF NOT EXISTS coltest (id INT)")
+        .await
+        .unwrap();
+    // Table still has 3 columns, not 1 — verify it wasn't recreated
+    let rows: Vec<(i32, Option<String>, Option<f64>)> = conn
+        .query("SELECT id, name, price FROM coltest ORDER BY id")
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+
+    // ===== Database management =====
+    conn.query_drop("CREATE DATABASE IF NOT EXISTS blogtest")
+        .await
+        .unwrap();
+    conn.query_drop("USE blogtest").await.unwrap();
+    conn.query_drop("CREATE TABLE t (a INT)").await.unwrap();
+    conn.query_drop("INSERT INTO t VALUES (1)").await.unwrap();
+    let val: i32 = conn.query_first("SELECT a FROM t").await.unwrap().unwrap();
+    assert_eq!(val, 1);
+
+    // if_not_exists should not error
+    conn.query_drop("CREATE DATABASE IF NOT EXISTS blogtest")
+        .await
+        .unwrap();
+    conn.query_drop("CREATE TABLE IF NOT EXISTS t (a INT)")
+        .await
+        .unwrap();
+
+    // DROP DATABASE IF EXISTS
+    conn.query_drop("DROP DATABASE IF EXISTS nonexistent")
+        .await
+        .unwrap();
+    conn.query_drop("DROP DATABASE blogtest").await.unwrap();
+
+    // Switch back to srrdb for cleanup
+    conn.query_drop("USE srrdb").await.unwrap();
+
     drop(conn);
 }

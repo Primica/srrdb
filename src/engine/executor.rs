@@ -62,7 +62,13 @@ impl Executor {
 
     pub fn execute(&self, db: &str, statement: &Statement) -> Result<ExecuteResult, String> {
         match statement {
-            Statement::CreateTable(ct) => self.execute_create_table(db, ct),
+            Statement::CreateTable(ct) => {
+                let table_name = name_to_string(&ct.name);
+                if ct.if_not_exists && self.table_exists(db, &table_name) {
+                    return Ok(ExecuteResult::Ok);
+                }
+                self.execute_create_table(db, ct)
+            }
             Statement::Insert(ins) => {
                 let table = table_object_name(&ins.table);
                 self.execute_insert(db, &table, &ins.columns, &ins.source)
@@ -117,7 +123,11 @@ impl Executor {
                 }
                 self.execute_drop_database(&db_name)
             }
-            Statement::CreateDatabase { db_name, .. } => {
+            Statement::CreateDatabase { db_name, if_not_exists, .. } => {
+                let name = name_to_string(db_name);
+                if *if_not_exists && self.database_exists(&name) {
+                    return Ok(ExecuteResult::Ok);
+                }
                 self.execute_create_database(db_name)
             }
             Statement::ShowDatabases { .. } => self.execute_show_databases(),
@@ -201,11 +211,12 @@ impl Executor {
         &self,
         db: &str,
         table_name: &str,
-        _columns: &[Ident],
+        columns: &[Ident],
         source: &Option<Box<Query>>,
     ) -> Result<ExecuteResult, String> {
-        let mut catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
-        catalog.get_table(db, table_name)?;
+        let catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let table_def = catalog.get_table(db, table_name)?.clone();
+        drop(catalog);
 
         let query = source
             .as_ref()
@@ -219,7 +230,21 @@ impl Executor {
                         .iter()
                         .map(|expr| sql_expr_to_value(expr))
                         .collect();
-                    result.push(Row { values: vals });
+                    if columns.is_empty() {
+                        result.push(Row { values: vals });
+                    } else {
+                        let mut mapped = vec![Value::Null; table_def.columns.len()];
+                        for (i, col_name) in columns.iter().enumerate() {
+                            if let Some(val) = vals.get(i) {
+                                let pos = table_def.columns
+                                    .iter()
+                                    .position(|c| c.name.eq_ignore_ascii_case(&col_name.value))
+                                    .ok_or_else(|| format!("Unknown column: {}", col_name.value))?;
+                                mapped[pos] = val.clone();
+                            }
+                        }
+                        result.push(Row { values: mapped });
+                    }
                 }
                 result
             }
@@ -227,6 +252,7 @@ impl Executor {
         };
 
         let row_count = rows.len() as u64;
+        let mut catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
         let first_id = catalog.next_row_id(table_name, row_count);
         drop(catalog);
 
@@ -598,6 +624,7 @@ fn sql_type_to_column_type(dt: &DataType) -> ColumnType {
         DataType::Boolean => ColumnType::Tiny,
         DataType::Blob(_) => ColumnType::Blob,
         DataType::Date => ColumnType::Date,
+        DataType::Datetime(_) => ColumnType::DateTime,
         DataType::Timestamp { .. } => ColumnType::Timestamp,
         DataType::JSON => ColumnType::Json,
         _ => ColumnType::VarString,
