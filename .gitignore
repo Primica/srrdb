@@ -1,2 +1,4 @@
 /target
 .srrdb_history
+/data
+*.tmp
