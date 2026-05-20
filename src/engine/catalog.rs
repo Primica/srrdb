@@ -13,6 +13,7 @@ pub struct TableDef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Catalog {
     pub databases: HashMap<String, DatabaseDef>,
+    pub sequences: HashMap<String, u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,7 +32,7 @@ impl Catalog {
                 tables: HashMap::new(),
             },
         );
-        Catalog { databases }
+        Catalog { databases, sequences: HashMap::new() }
     }
 
     pub fn get_database(&self, name: &str) -> Option<&DatabaseDef> {
@@ -71,6 +72,7 @@ impl Catalog {
                 columns,
             },
         );
+        self.sequences.insert(table_name.to_string(), 1);
         Ok(())
     }
 
@@ -83,6 +85,7 @@ impl Catalog {
         db.tables
             .remove(table_name)
             .ok_or_else(|| format!("Unknown table: {table_name}"))?;
+        self.sequences.remove(table_name);
         Ok(())
     }
 
@@ -94,6 +97,12 @@ impl Catalog {
         db.tables
             .get(table_name)
             .ok_or_else(|| format!("Unknown table: {table_name}"))
+    }
+
+    pub fn next_row_id(&mut self, table_name: &str, count: u64) -> u64 {
+        let current = self.sequences.get(table_name).copied().unwrap_or(1);
+        self.sequences.insert(table_name.to_string(), current + count);
+        current
     }
 
     pub fn table_exists(&self, db_name: &str, table_name: &str) -> bool {

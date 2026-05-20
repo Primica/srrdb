@@ -54,6 +54,12 @@ impl Wal {
     }
 
     pub fn open(&mut self) -> std::io::Result<()> {
+        if self.file.is_some() {
+            return Ok(());
+        }
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -64,12 +70,17 @@ impl Wal {
     }
 
     pub fn append(&mut self, entry: &WalEntry) -> std::io::Result<()> {
+        self.open()?;
         let bytes = entry.serialize();
         if let Some(ref mut file) = self.file {
             file.write_all(&bytes)?;
             file.sync_all()?;
         }
         Ok(())
+    }
+
+    pub fn ensure_opened(&mut self) -> std::io::Result<()> {
+        self.open()
     }
 
     pub fn append_sync(&mut self, entry: &WalEntry, catalog: &Catalog, storage: &Storage) -> std::io::Result<()> {
@@ -137,6 +148,9 @@ impl Wal {
 
     pub fn truncate(&mut self, catalog: &Catalog, storage: &Storage) -> std::io::Result<()> {
         self.file = None;
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
 
         let bytes = build_checkpoint_data(catalog, storage);
         std::fs::write(&self.path, &bytes)?;

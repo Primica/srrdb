@@ -17,9 +17,8 @@ impl Persistence {
         Persistence { data_dir }
     }
 
-    pub fn init(&self) -> std::io::Result<()> {
-        std::fs::create_dir_all(self.data_dir.join(DATA_DIR))?;
-        Ok(())
+    pub fn ensure_dirs(&self) -> std::io::Result<()> {
+        std::fs::create_dir_all(self.data_dir.join(DATA_DIR))
     }
 
     pub fn load_catalog(&self) -> Option<Catalog> {
@@ -46,6 +45,7 @@ impl Persistence {
     }
 
     pub fn save_catalog(&self, catalog: &Catalog) -> std::io::Result<()> {
+        self.ensure_dirs()?;
         let path = self.data_dir.join(CATALOG_FILE);
         let bytes = bincode::serialize(catalog)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
@@ -78,6 +78,7 @@ impl Persistence {
     }
 
     pub fn save_table_data(&self, table_name: &str, rows: &[Row]) -> std::io::Result<()> {
+        self.ensure_dirs()?;
         let path = self.table_path(table_name);
         let bytes = bincode::serialize(rows)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
@@ -92,6 +93,10 @@ impl Persistence {
             info!("Removed table data file {}", path.display());
         }
         Ok(())
+    }
+
+    pub fn has_existing_data(&self) -> bool {
+        self.data_dir.join(CATALOG_FILE).exists()
     }
 
     pub fn data_dir(&self) -> &Path {

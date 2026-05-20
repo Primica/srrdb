@@ -184,9 +184,8 @@ impl Executor {
         _columns: &[Ident],
         source: &Option<Box<Query>>,
     ) -> Result<ExecuteResult, String> {
-        let _catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
-        _catalog.get_table(db, table_name)?;
-        drop(_catalog);
+        let mut catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
+        catalog.get_table(db, table_name)?;
 
         let query = source
             .as_ref()
@@ -208,6 +207,9 @@ impl Executor {
         };
 
         let row_count = rows.len() as u64;
+        let first_id = catalog.next_row_id(table_name, row_count);
+        drop(catalog);
+
         let wal_entry = WalEntry::InsertRows {
             table_name: table_name.to_string(),
             rows: rows.clone(),
@@ -222,7 +224,7 @@ impl Executor {
         info!("Inserted {row_count} rows into {table_name}");
         Ok(ExecuteResult::Affected {
             rows: row_count,
-            last_insert_id: 0,
+            last_insert_id: first_id,
         })
     }
 

@@ -14,37 +14,32 @@ use crate::server::connection::handle_connection;
 
 pub async fn start(config: Config) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let persistence = Persistence::new(config.data_dir.clone());
-    persistence.init()?;
 
-    let mut wal = Wal::new(&config.data_dir);
-    wal.open()?;
+    let has_data = persistence.has_existing_data();
 
-    let (catalog, storage) = if wal.path().exists() && wal.path().metadata()?.len() > 0 {
+    let (catalog, storage, wal) = if has_data {
+        persistence.ensure_dirs()?;
+        let mut wal = Wal::new(&config.data_dir);
+        wal.open()?;
+
         // Try checkpoint recovery first
         let wal_bytes = std::fs::read(wal.path())?;
-        match crate::engine::wal::replay_checkpoint(&wal_bytes) {
-            Ok((cat, stg)) => {
-                info!("Recovered from WAL checkpoint");
-                (Arc::new(Mutex::new(cat)), Arc::new(Mutex::new(stg)))
-            }
-            Err(_) => {
-                // Fallback: load from separate files, then replay WAL
-                info!("WAL checkpoint recovery failed, trying file-based + replay");
-                let catalog = match persistence.load_catalog() {
-                    Some(cat) => {
-                        info!("Loaded catalog from disk");
-                        Arc::new(Mutex::new(cat))
-                    }
-                    None => {
-                        info!("No existing catalog found, starting fresh");
-                        Arc::new(Mutex::new(Catalog::new()))
-                    }
-                };
+        let (cat, stg) = if !wal_bytes.is_empty() {
+            match crate::engine::wal::replay_checkpoint(&wal_bytes) {
+                Ok((cat, stg)) => {
+                    info!("Recovered from WAL checkpoint");
+                    (cat, stg)
+                }
+                Err(_) => {
+                    info!("WAL checkpoint recovery failed, trying file-based + replay");
+                    let mut catalog = persistence.load_catalog()
+                        .unwrap_or_else(|| {
+                            info!("No existing catalog found, starting fresh");
+                            Catalog::new()
+                        });
 
-                let storage = {
-                    let cat = catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
                     let mut stg = Storage::new();
-                    for db in cat.databases.values() {
+                    for db in catalog.databases.values() {
                         for table_name in db.tables.keys() {
                             if let Some(rows) = persistence.load_table_data(table_name) {
                                 stg.insert_rows(table_name, rows);
@@ -52,39 +47,26 @@ pub async fn start(config: Config) -> std::result::Result<(), Box<dyn std::error
                             }
                         }
                     }
-                    drop(cat);
-                    Arc::new(Mutex::new(stg))
-                };
 
-                // Replay WAL entries on top of loaded state
-                {
-                    let mut cat = catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
-                    let mut stg = storage.lock().map_err(|e| format!("Lock error: {e}"))?;
-                    let replayed = wal.replay(&mut cat, &mut stg)?;
+                    // Replay WAL entries on top of loaded state
+                    let replayed = wal.replay(&mut catalog, &mut stg)?;
                     if replayed > 0 {
                         info!("Replayed {replayed} WAL entries");
                     }
+
+                    (catalog, stg)
                 }
+            }
+        } else {
+            // WAL exists but is empty — load from file-based storage
+            let catalog = persistence.load_catalog()
+                .unwrap_or_else(|| {
+                    info!("No existing catalog found, starting fresh");
+                    Catalog::new()
+                });
 
-                (catalog, storage)
-            }
-        }
-    } else {
-        let catalog = match persistence.load_catalog() {
-            Some(cat) => {
-                info!("Loaded catalog from disk");
-                Arc::new(Mutex::new(cat))
-            }
-            None => {
-                info!("No existing catalog found, starting fresh");
-                Arc::new(Mutex::new(Catalog::new()))
-            }
-        };
-
-        let storage = {
-            let cat = catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
             let mut stg = Storage::new();
-            for db in cat.databases.values() {
+            for db in catalog.databases.values() {
                 for table_name in db.tables.keys() {
                     if let Some(rows) = persistence.load_table_data(table_name) {
                         stg.insert_rows(table_name, rows);
@@ -92,20 +74,24 @@ pub async fn start(config: Config) -> std::result::Result<(), Box<dyn std::error
                     }
                 }
             }
-            drop(cat);
-            Arc::new(Mutex::new(stg))
+
+            (catalog, stg)
         };
 
-        (catalog, storage)
+        (Arc::new(Mutex::new(cat)), Arc::new(Mutex::new(stg)), Arc::new(Mutex::new(wal)))
+    } else {
+        info!("Starting fresh — no existing data found");
+        let catalog = Arc::new(Mutex::new(Catalog::new()));
+        let storage = Arc::new(Mutex::new(Storage::new()));
+        let wal = Wal::new(&config.data_dir);
+        (catalog, storage, Arc::new(Mutex::new(wal)))
     };
-
-    let wal_arc = Arc::new(Mutex::new(wal));
 
     let executor = Arc::new(Executor::with_wal(
         catalog.clone(),
         storage.clone(),
         persistence,
-        wal_arc.clone(),
+        wal.clone(),
     ));
 
     let addr = config.addr();
