@@ -104,7 +104,7 @@ impl Persistence {
     }
 
     fn table_path(&self, table_name: &str) -> PathBuf {
-        self.data_dir.join(DATA_DIR).join(format!("{table_name}.srrdb"))
+        self.data_dir.join(DATA_DIR).join(format!("{}.srrdb", table_name.to_lowercase()))
     }
 }
 

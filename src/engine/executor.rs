@@ -175,8 +175,9 @@ impl Executor {
                     return;
                 }
             };
-            if let Some(table_rows) = storage.tables.get(table_name) {
-                if let Err(e) = persistence.save_table_data(table_name, table_rows) {
+            let tn = table_name.to_lowercase();
+            if let Some(table_rows) = storage.tables.get(&tn) {
+                if let Err(e) = persistence.save_table_data(&tn, table_rows) {
                     error!("Failed to save table data for {table_name}: {e}");
                 }
             }
@@ -530,19 +531,20 @@ impl Executor {
     }
 
     fn execute_drop_table(&self, db: &str, table_name: &str) -> Result<ExecuteResult, String> {
+        let tn = table_name.to_lowercase();
         let wal_entry = WalEntry::DropTable {
-            table_name: table_name.to_string(),
+            table_name: tn.clone(),
         };
         self.log_wal(&wal_entry);
 
         let mut catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
-        catalog.drop_table(db, table_name)?;
+        catalog.drop_table(db, &tn)?;
         let mut storage = self.storage.lock().map_err(|e| format!("Lock error: {e}"))?;
-        storage.clear_table(table_name);
+        storage.clear_table(&tn);
         drop((catalog, storage));
 
         if let Some(ref persistence) = self.persistence {
-            let _ = persistence.remove_table_data(table_name);
+            let _ = persistence.remove_table_data(&tn);
             let catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
             let _ = persistence.save_catalog(&catalog);
         }
