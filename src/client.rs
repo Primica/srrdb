@@ -427,6 +427,14 @@ pub async fn run_client(
                     break;
                 }
 
+                if trimmed.trim_end_matches(';').eq_ignore_ascii_case("schema") {
+                    if !multi_line_buf.is_empty() {
+                        multi_line_buf.clear();
+                    }
+                    run_schema(&mut stream).await;
+                    continue;
+                }
+
                 if let Some(path) = trimmed.strip_prefix("source ") {
                     if !multi_line_buf.is_empty() {
                         multi_line_buf.clear();
@@ -484,6 +492,46 @@ pub async fn run_client(
 
     println!("Bye.");
     Ok(())
+}
+
+async fn run_schema(stream: &mut TcpStream) {
+    let tables = match execute_query(stream, "SHOW TABLES").await {
+        Ok(QueryResult::ResultSet { rows, .. }) => {
+            let mut names = Vec::new();
+            for row in &rows {
+                if let Some(Some(name)) = row.first() {
+                    if let Ok(s) = std::str::from_utf8(name) {
+                        names.push(s.to_string());
+                    }
+                }
+            }
+            names
+        }
+        Ok(_) => {
+            println!("No tables found.");
+            return;
+        }
+        Err(e) => {
+            println!("Error: {e}");
+            return;
+        }
+    };
+
+    if tables.is_empty() {
+        println!("No tables found.");
+        return;
+    }
+
+    for (i, table) in tables.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+        println!("── {} ──", table);
+        match execute_query(stream, &format!("DESCRIBE {table}")).await {
+            Ok(result) => format_result(&result),
+            Err(e) => println!("  Error: {e}"),
+        }
+    }
 }
 
 fn parse_use_db(sql: &str) -> Option<String> {

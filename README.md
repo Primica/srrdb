@@ -146,6 +146,22 @@ The client also supports `source <path>` to execute SQL from a file:
 echo "source /path/to/script.sql;" | cargo run --release -- --client
 ```
 
+The client supports a `schema` meta-command that shows the complete schema
+of all tables in the current database (runs `SHOW TABLES` then `DESCRIBE` on each):
+```
+srrdb (root@blog)> schema
+
+── USERS ──
++---------------+---------+------+-----+---------+----------------+
+| Field         | Type    | Null | Key | Default | Extra          |
++---------------+---------+------+-----+---------+----------------+
+| USER_ID       | int     | YES  | PRI | NULL    | auto_increment |
+| USERNAME      | varchar | YES  |     | NULL    |                |
+| ...           | ...     | ...  | ... | ...     | ...            |
++---------------+---------+------+-----+---------+----------------+
+6 rows in set
+```
+
 ## Supported SQL
 
 ### Database Management
