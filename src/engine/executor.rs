@@ -136,6 +136,9 @@ impl Executor {
             Statement::ShowDatabases { .. } => self.execute_show_databases(),
             Statement::ShowTables { .. } => self.execute_show_tables(db),
             Statement::Use(use_stmt) => self.execute_use(use_stmt),
+            Statement::ExplainTable { table_name, .. } => {
+                self.execute_describe(db, &name_to_string(table_name))
+            }
             _ => Err(format!("Unsupported statement")),
         }
     }
@@ -617,6 +620,61 @@ impl Executor {
 
         Ok(ExecuteResult::DatabaseChanged(db_name))
     }
+
+    fn execute_describe(&self, db: &str, table_name: &str) -> Result<ExecuteResult, String> {
+        let catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let table = catalog.get_table(db, table_name)?.clone();
+        drop(catalog);
+
+        let field_col = Column::new("Field", "", ColumnType::VarChar);
+        let type_col = Column::new("Type", "", ColumnType::VarChar);
+        let null_col = Column::new("Null", "", ColumnType::VarChar);
+        let key_col = Column::new("Key", "", ColumnType::VarChar);
+        let default_col = Column::new("Default", "", ColumnType::VarChar);
+        let extra_col = Column::new("Extra", "", ColumnType::VarChar);
+
+        let mut rows = Vec::new();
+        for col in &table.columns {
+            let type_str = column_type_name(col.col_type, col.column_length);
+            let null_str = "YES".to_string();
+            let key_str = if col.auto_increment { "PRI".to_string() } else { String::new() };
+            let default_str = match &col.default_expr {
+                Some(expr) => match expr {
+                    DefaultExpr::Value(v) => v.to_string(),
+                    DefaultExpr::CurrentTimestamp => "CURRENT_TIMESTAMP".to_string(),
+                },
+                None => String::new(),
+            };
+            let mut extra_parts = Vec::new();
+            if col.auto_increment {
+                extra_parts.push("auto_increment");
+            }
+            if col.default_expr.is_some() {
+                extra_parts.push("DEFAULT");
+            }
+            let extra_str = extra_parts.join(" ");
+
+            rows.push(Row {
+                values: vec![
+                    Value::Text(col.name.clone()),
+                    Value::Text(type_str),
+                    Value::Text(null_str),
+                    Value::Text(key_str),
+                    if default_str.is_empty() {
+                        Value::Null
+                    } else {
+                        Value::Text(default_str)
+                    },
+                    Value::Text(extra_str),
+                ],
+            });
+        }
+
+        Ok(ExecuteResult::Rows {
+            columns: vec![field_col, type_col, null_col, key_col, default_col, extra_col],
+            rows,
+        })
+    }
 }
 
 fn name_to_string(name: &ObjectName) -> String {
@@ -640,6 +698,44 @@ fn table_object_name(to: &sqlparser::ast::TableObject) -> String {
     match to {
         sqlparser::ast::TableObject::TableName(name) => name_to_string(name),
         _ => String::new(),
+    }
+}
+
+fn column_type_name(ct: ColumnType, len: u32) -> String {
+    let base = match ct {
+        ColumnType::Decimal => "decimal",
+        ColumnType::Tiny => "tinyint",
+        ColumnType::Short => "smallint",
+        ColumnType::Long => "int",
+        ColumnType::Float => "float",
+        ColumnType::Double => "double",
+        ColumnType::Null => "null",
+        ColumnType::Timestamp => "timestamp",
+        ColumnType::LongLong => "bigint",
+        ColumnType::Int24 => "mediumint",
+        ColumnType::Date => "date",
+        ColumnType::Time => "time",
+        ColumnType::DateTime => "datetime",
+        ColumnType::Year => "year",
+        ColumnType::VarChar => "varchar",
+        ColumnType::Bit => "bit",
+        ColumnType::Json => "json",
+        ColumnType::NewDecimal => "decimal",
+        ColumnType::Enum => "enum",
+        ColumnType::Set => "set",
+        ColumnType::TinyBlob => "tinyblob",
+        ColumnType::MediumBlob => "mediumblob",
+        ColumnType::LongBlob => "longblob",
+        ColumnType::Blob => "text",
+        ColumnType::VarString => "varchar",
+        ColumnType::String => "char",
+        ColumnType::Geometry => "geometry",
+    };
+    match ct {
+        ColumnType::VarChar | ColumnType::VarString | ColumnType::String => {
+            format!("{base}({len})")
+        }
+        _ => base.to_string(),
     }
 }
 
