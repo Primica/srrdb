@@ -400,13 +400,17 @@ pub async fn run_client(
         return Err(format!("auth error {code}: {msg}"));
     }
 
+    let mut current_db: Option<String> = None;
     println!("Connected.");
     println!("Type 'exit' or 'quit' to disconnect.\n");
 
     let mut multi_line_buf = String::new();
     loop {
         let prompt = if multi_line_buf.is_empty() {
-            format!("srrdb ({})> ", user)
+            match &current_db {
+                Some(db) => format!("srrdb ({}@{})> ", user, db),
+                None => format!("srrdb ({})> ", user),
+            }
         } else {
             "    -> ".to_string()
         };
@@ -433,6 +437,9 @@ pub async fn run_client(
                             for statement in content.split(';') {
                                 let stmt = statement.trim();
                                 if !stmt.is_empty() {
+                                    if let Some(db) = parse_use_db(stmt) {
+                                        current_db = Some(db);
+                                    }
                                     match execute_query(&mut stream, stmt).await {
                                         Ok(result) => format_result(&result),
                                         Err(e) => println!("Error: {}", e),
@@ -460,6 +467,9 @@ pub async fn run_client(
                     let sql = multi_line_buf.trim().to_string();
                     multi_line_buf.clear();
 
+                    if let Some(db) = parse_use_db(&sql) {
+                        current_db = Some(db);
+                    }
                     match execute_query(&mut stream, &sql).await {
                         Ok(result) => format_result(&result),
                         Err(e) => println!("Error: {}", e),
@@ -474,6 +484,18 @@ pub async fn run_client(
 
     println!("Bye.");
     Ok(())
+}
+
+fn parse_use_db(sql: &str) -> Option<String> {
+    let s = sql.trim().trim_end_matches(';').trim();
+    let upper = s.to_uppercase();
+    if upper.starts_with("USE ") {
+        let name = s[4..].trim().trim_matches('`').trim_matches('\'').trim_matches('"');
+        if !name.is_empty() {
+            return Some(name.to_string());
+        }
+    }
+    None
 }
 
 fn read_line(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
