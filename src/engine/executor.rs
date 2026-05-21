@@ -525,7 +525,7 @@ impl Executor {
 
     pub fn database_exists(&self, db_name: &str) -> bool {
         self.catalog.lock()
-            .map(|c| c.databases.contains_key(db_name))
+            .map(|c| c.database_exists(db_name))
             .unwrap_or(false)
     }
 
@@ -563,7 +563,7 @@ impl Executor {
 
     fn execute_drop_database(&self, db_name: &str) -> Result<ExecuteResult, String> {
         let mut catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
-        catalog.databases.remove(db_name)
+        catalog.remove_database(db_name)
             .ok_or_else(|| format!("Unknown database: {db_name}"))?;
         drop(catalog);
         self.save();
@@ -573,7 +573,7 @@ impl Executor {
 
     fn execute_show_tables(&self, db: &str) -> Result<ExecuteResult, String> {
         let catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
-        let db_def = catalog.databases.get(db)
+        let db_def = catalog.get_database(db)
             .ok_or_else(|| format!("Unknown database: {db}"))?;
         let mut names: Vec<String> = db_def.tables.keys().cloned().collect();
         names.sort();
@@ -592,7 +592,7 @@ impl Executor {
 
     fn execute_show_databases(&self) -> Result<ExecuteResult, String> {
         let catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
-        let mut names: Vec<String> = catalog.databases.keys().cloned().collect();
+        let mut names: Vec<String> = catalog.databases.values().map(|d| d.name.clone()).collect();
         names.sort();
         let column = Column::new("Database", "", ColumnType::VarChar);
         let rows: Vec<Row> = names
@@ -614,7 +614,7 @@ impl Executor {
         };
 
         let catalog = self.catalog.lock().map_err(|e| format!("Lock error: {e}"))?;
-        if !catalog.databases.contains_key(&db_name) {
+        if !catalog.database_exists(&db_name) {
             return Err(format!("Unknown database: {db_name}"));
         }
 
