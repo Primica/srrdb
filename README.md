@@ -22,11 +22,14 @@ authentication, and on-disk persistence — no MySQL dependency.
 - Built-in MySQL wire protocol client (`--client` flag)
 - Interactive REPL for in-process testing
 - Concurrent connections via Tokio async
-- Full SQL support: CREATE/DROP TABLE, CREATE/DROP DATABASE, INSERT, SELECT, DELETE, UPDATE, USE, SHOW
+- Full SQL support: CREATE/DROP TABLE, CREATE/DROP DATABASE, INSERT, SELECT, DELETE, UPDATE, USE, SHOW, DESCRIBE/DESC
 - WHERE with comparison operators, AND/OR, LIKE, BETWEEN, IN, IS NULL
 - ORDER BY (ASC/DESC), LIMIT, OFFSET
 - Database management: CREATE DATABASE, DROP DATABASE, USE, SHOW DATABASES, SHOW TABLES
+- DESCRIBE / DESC — view table column info (Field, Type, Null, Key, Default, Extra)
+- Column features: AUTO_INCREMENT, DEFAULT (literals + NOW()/CURRENT_TIMESTAMP)
 - Client-side `source <path>` command to execute SQL files
+- Interactive prompt with database indicator: `srrdb (root@db_name)> `
 
 ## Requirements
 
@@ -131,6 +134,13 @@ cargo run --release -- --client -H 192.168.1.10 -P 3307 -u admin -p secret
 mysql -h 127.0.0.1 -P 3307 -u root srrdb
 ```
 
+The client prompt shows the connected database after any `USE` command:
+```
+srrdb (root)>            ← no database selected yet
+srrdb (root@blog)>       ← after USE blog
+srrdb (root@testdb)>     ← after USE testdb
+```
+
 The client also supports `source <path>` to execute SQL from a file:
 ```bash
 echo "source /path/to/script.sql;" | cargo run --release -- --client
@@ -148,13 +158,18 @@ echo "source /path/to/script.sql;" | cargo run --release -- --client
 
 ### Data Definition
 
-- `CREATE TABLE` — INT, BIGINT, SMALLINT, TINYINT, FLOAT, DOUBLE, VARCHAR, CHAR, TEXT,
-  BOOLEAN, DATE, TIMESTAMP, JSON, BLOB, DECIMAL
+- `CREATE TABLE` / `CREATE TABLE IF NOT EXISTS` — INT, BIGINT, SMALLINT, TINYINT, FLOAT, DOUBLE,
+  VARCHAR, CHAR, TEXT, BOOLEAN, DATE, DATETIME, TIMESTAMP, JSON, BLOB, DECIMAL
 - `DROP TABLE` / `DROP TABLE IF EXISTS`
+- Column options: `AUTO_INCREMENT`, `PRIMARY KEY`, `DEFAULT <expr>`, `FOREIGN KEY` (accepted,
+  constraints not enforced)
+- `DESCRIBE <table>` / `DESC <table>` — show column metadata (Field, Type, Null, Key, Default, Extra)
 
 ### Data Manipulation
 
-- `INSERT INTO ... VALUES ( ... )` — multiple rows
+- `INSERT INTO ... VALUES ( ... )` — multiple rows, with optional column list
+- `INSERT INTO t (col1, col2) VALUES (val1, val2)` — mapped to correct columns, missing
+  columns get their DEFAULT value, AUTO_INCREMENT, or NULL
 - `DELETE FROM <table> WHERE <condition>` — delete without WHERE truncates all rows
 - `UPDATE <table> SET <col> = <expr> WHERE <condition>`
 
