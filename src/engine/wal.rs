@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 use crate::engine::catalog::Catalog;
+use crate::engine::index::IndexDef;
 use crate::engine::storage::{Row, Storage};
-use crate::engine::types::Column;
 
 const MAGIC: [u8; 2] = [0x53, 0x44]; // "SD" = srrdb
 const ENTRY_HEADER_SIZE: usize = 7; // magic(2) + entry_len(4) + entry_type(1)
@@ -17,6 +17,8 @@ pub enum WalEntryType {
     DropTable = 2,
     InsertRows = 3,
     TableSnapshot = 4,
+    CreateIndex = 5,
+    DropIndex = 6,
     Checkpoint = 255,
 }
 
@@ -24,7 +26,7 @@ pub enum WalEntryType {
 pub enum WalEntry {
     CreateTable {
         table_name: String,
-        columns: Vec<Column>,
+        columns: Vec<crate::engine::types::Column>,
     },
     DropTable {
         table_name: String,
@@ -36,6 +38,15 @@ pub enum WalEntry {
     TableSnapshot {
         table_name: String,
         rows: Vec<Row>,
+    },
+    CreateIndex {
+        db_name: String,
+        index_def: IndexDef,
+    },
+    DropIndex {
+        db_name: String,
+        index_name: String,
+        table_name: String,
     },
     Checkpoint,
 }
@@ -83,7 +94,12 @@ impl Wal {
         self.open()
     }
 
-    pub fn append_sync(&mut self, entry: &WalEntry, catalog: &Catalog, storage: &Storage) -> std::io::Result<()> {
+    pub fn append_sync(
+        &mut self,
+        entry: &WalEntry,
+        catalog: &Catalog,
+        storage: &Storage,
+    ) -> std::io::Result<()> {
         self.append(entry)?;
         self.truncate(catalog, storage)
     }
@@ -129,7 +145,6 @@ impl Wal {
                     }
                 }
                 Ok(None) => {
-                    // Checkpoint entry, no action needed
                     count += 1;
                 }
                 Err(e) => {
@@ -171,16 +186,17 @@ impl Wal {
 
 impl WalEntry {
     fn serialize(&self) -> Vec<u8> {
-        let payload = match self {
-            WalEntry::CreateTable { table_name, columns } => {
+        let payload: Vec<u8> = match self {
+            WalEntry::CreateTable {
+                table_name,
+                columns,
+            } => {
                 let mut p = Vec::new();
                 p.extend_from_slice(&bincode::serialize(table_name).unwrap());
                 p.extend_from_slice(&bincode::serialize(columns).unwrap());
                 p
             }
-            WalEntry::DropTable { table_name } => {
-                bincode::serialize(table_name).unwrap()
-            }
+            WalEntry::DropTable { table_name } => bincode::serialize(table_name).unwrap(),
             WalEntry::InsertRows { table_name, rows } => {
                 let mut p = Vec::new();
                 p.extend_from_slice(&bincode::serialize(table_name).unwrap());
@@ -193,6 +209,26 @@ impl WalEntry {
                 p.extend_from_slice(&bincode::serialize(rows).unwrap());
                 p
             }
+            WalEntry::CreateIndex {
+                db_name,
+                index_def,
+            } => {
+                let mut p = Vec::new();
+                p.extend_from_slice(&bincode::serialize(db_name).unwrap());
+                p.extend_from_slice(&bincode::serialize(index_def).unwrap());
+                p
+            }
+            WalEntry::DropIndex {
+                db_name,
+                index_name,
+                table_name,
+            } => {
+                let mut p = Vec::new();
+                p.extend_from_slice(&bincode::serialize(db_name).unwrap());
+                p.extend_from_slice(&bincode::serialize(index_name).unwrap());
+                p.extend_from_slice(&bincode::serialize(table_name).unwrap());
+                p
+            }
             WalEntry::Checkpoint => Vec::new(),
         };
 
@@ -202,6 +238,8 @@ impl WalEntry {
             WalEntry::DropTable { .. } => WalEntryType::DropTable as u8,
             WalEntry::InsertRows { .. } => WalEntryType::InsertRows as u8,
             WalEntry::TableSnapshot { .. } => WalEntryType::TableSnapshot as u8,
+            WalEntry::CreateIndex { .. } => WalEntryType::CreateIndex as u8,
+            WalEntry::DropIndex { .. } => WalEntryType::DropIndex as u8,
             WalEntry::Checkpoint => WalEntryType::Checkpoint as u8,
         };
 
@@ -222,9 +260,13 @@ impl WalEntry {
                         let s_len = bincode::serialized_size(&s).unwrap() as usize;
                         (s, s_len)
                     })?;
-                let columns: Vec<Column> = bincode::deserialize(&payload[offset..])
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-                Ok(Some(WalEntry::CreateTable { table_name, columns }))
+                let columns: Vec<crate::engine::types::Column> =
+                    bincode::deserialize(&payload[offset..])
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                Ok(Some(WalEntry::CreateTable {
+                    table_name,
+                    columns,
+                }))
             }
             2 => {
                 let table_name = bincode::deserialize(payload)
@@ -253,6 +295,42 @@ impl WalEntry {
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
                 Ok(Some(WalEntry::TableSnapshot { table_name, rows }))
             }
+            5 => {
+                let (db_name, offset) = bincode::deserialize::<String>(payload)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                    .map(|s| {
+                        let s_len = bincode::serialized_size(&s).unwrap() as usize;
+                        (s, s_len)
+                    })?;
+                let index_def: IndexDef = bincode::deserialize(&payload[offset..])
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                Ok(Some(WalEntry::CreateIndex {
+                    db_name,
+                    index_def,
+                }))
+            }
+            6 => {
+                let (db_name, offset) = bincode::deserialize::<String>(payload)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                    .map(|s| {
+                        let s_len = bincode::serialized_size(&s).unwrap() as usize;
+                        (s, s_len)
+                    })?;
+                let (index_name, offset2) =
+                    bincode::deserialize::<String>(&payload[offset..])
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                        .map(|s| {
+                            let s_len = bincode::serialized_size(&s).unwrap() as usize;
+                            (s, s_len)
+                        })?;
+                let table_name: String = bincode::deserialize(&payload[offset + offset2..])
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                Ok(Some(WalEntry::DropIndex {
+                    db_name,
+                    index_name,
+                    table_name,
+                }))
+            }
             255 => Ok(Some(WalEntry::Checkpoint)),
             _ => {
                 warn!("WAL: unknown entry type {entry_type}, skipping");
@@ -264,30 +342,56 @@ impl WalEntry {
 
 fn apply_entry(catalog: &mut Catalog, storage: &mut Storage, entry: &WalEntry) -> bool {
     match entry {
-        WalEntry::CreateTable { table_name, columns } => {
-            catalog.create_table("srrdb", table_name, columns.clone()).map_err(|e| {
+        WalEntry::CreateTable {
+            table_name,
+            columns,
+        } => catalog
+            .create_table("srrdb", table_name, columns.clone())
+            .map_err(|e| {
                 warn!("WAL replay: CREATE TABLE {table_name} failed: {e}");
-            }).is_ok()
-        }
+            })
+            .is_ok(),
         WalEntry::DropTable { table_name } => {
             catalog.drop_table("srrdb", table_name).map_err(|e| {
                 warn!("WAL replay: DROP TABLE {table_name} failed: {e}");
-            }).is_ok() && {
-                storage.clear_table(table_name);
-                true
-            }
+            }).is_ok()
+                && {
+                    storage.clear_table(table_name);
+                    true
+                }
         }
         WalEntry::InsertRows { table_name, rows } => {
             storage.insert_rows(table_name, rows.clone());
             true
         }
         WalEntry::TableSnapshot { table_name, rows } => {
-            storage.clear_table(table_name);
+            if let Some(map) = storage.get_table_mut(table_name) {
+                map.clear();
+            }
             if !rows.is_empty() {
                 storage.insert_rows(table_name, rows.clone());
             }
             true
         }
+        WalEntry::CreateIndex {
+            db_name,
+            index_def,
+        } => catalog
+            .create_index(db_name, index_def.clone())
+            .map_err(|e| {
+                warn!("WAL replay: CREATE INDEX {} failed: {e}", index_def.name);
+            })
+            .is_ok(),
+        WalEntry::DropIndex {
+            db_name,
+            index_name,
+            table_name,
+        } => catalog
+            .drop_index(db_name, index_name, table_name)
+            .map_err(|e| {
+                warn!("WAL replay: DROP INDEX {index_name} failed: {e}");
+            })
+            .is_ok(),
         WalEntry::Checkpoint => true,
     }
 }
@@ -295,16 +399,17 @@ fn apply_entry(catalog: &mut Catalog, storage: &mut Storage, entry: &WalEntry) -
 fn build_checkpoint_data(catalog: &Catalog, storage: &Storage) -> Vec<u8> {
     let mut bytes = Vec::new();
 
-    // Write a full CHECKPOINT entry with all catalog + storage data
     let entry_type = WalEntryType::Checkpoint as u8;
     let mut payload = Vec::new();
     payload.extend_from_slice(&bincode::serialize(catalog).unwrap());
 
-    let table_list: Vec<(&String, &Vec<Row>)> = storage.tables.iter().collect();
-    payload.extend_from_slice(&bincode::serialize(&table_list.len()).unwrap());
-    for (name, rows) in &storage.tables {
+    let mut table_names: Vec<&String> = storage.tables.keys().collect();
+    table_names.sort();
+    payload.extend_from_slice(&bincode::serialize(&table_names.len()).unwrap());
+    for name in &table_names {
+        let rows: Vec<&Row> = storage.tables.get(*name).unwrap().values().collect();
         payload.extend_from_slice(&bincode::serialize(name).unwrap());
-        payload.extend_from_slice(&bincode::serialize(rows).unwrap());
+        payload.extend_from_slice(&bincode::serialize(&rows).unwrap());
     }
 
     let entry_len = (ENTRY_HEADER_SIZE + payload.len()) as u32;
@@ -317,13 +422,19 @@ fn build_checkpoint_data(catalog: &Catalog, storage: &Storage) -> Vec<u8> {
 
 pub fn replay_checkpoint(data: &[u8]) -> std::io::Result<(Catalog, Storage)> {
     if data.len() < ENTRY_HEADER_SIZE || data[..2] != MAGIC {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid checkpoint"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Invalid checkpoint",
+        ));
     }
     let entry_len = u32::from_le_bytes([data[2], data[3], data[4], data[5]]) as usize;
     let entry_type = data[6];
 
     if entry_type != WalEntryType::Checkpoint as u8 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Not a checkpoint"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Not a checkpoint",
+        ));
     }
 
     let payload = &data[ENTRY_HEADER_SIZE..entry_len.min(data.len())];

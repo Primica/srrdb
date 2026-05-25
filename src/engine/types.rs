@@ -1,3 +1,5 @@
+use std::hash::{Hash, Hasher};
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -6,7 +8,7 @@ pub enum DefaultExpr {
     CurrentTimestamp,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Null,
     Int(i64),
@@ -15,6 +17,72 @@ pub enum Value {
     Double(f64),
     Bytes(Vec<u8>),
     Text(String),
+}
+
+impl Eq for Value {}
+
+impl Hash for Value {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Value::Null => 0u8.hash(state),
+            Value::Int(v) => {
+                1u8.hash(state);
+                v.hash(state);
+            }
+            Value::UInt(v) => {
+                2u8.hash(state);
+                v.hash(state);
+            }
+            Value::Float(v) => {
+                3u8.hash(state);
+                v.to_bits().hash(state);
+            }
+            Value::Double(v) => {
+                4u8.hash(state);
+                v.to_bits().hash(state);
+            }
+            Value::Bytes(v) => {
+                5u8.hash(state);
+                v.hash(state);
+            }
+            Value::Text(v) => {
+                6u8.hash(state);
+                v.hash(state);
+            }
+        }
+    }
+}
+
+impl PartialOrd for Value {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Value {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let variant_order = |v: &Value| -> u8 {
+            match v {
+                Value::Null => 0,
+                Value::Int(_) => 1,
+                Value::UInt(_) => 2,
+                Value::Float(_) => 3,
+                Value::Double(_) => 4,
+                Value::Bytes(_) => 5,
+                Value::Text(_) => 6,
+            }
+        };
+        match (self, other) {
+            (Value::Null, Value::Null) => std::cmp::Ordering::Equal,
+            (Value::Int(a), Value::Int(b)) => a.cmp(b),
+            (Value::UInt(a), Value::UInt(b)) => a.cmp(b),
+            (Value::Float(a), Value::Float(b)) => a.total_cmp(b),
+            (Value::Double(a), Value::Double(b)) => a.total_cmp(b),
+            (Value::Bytes(a), Value::Bytes(b)) => a.cmp(b),
+            (Value::Text(a), Value::Text(b)) => a.cmp(b),
+            _ => variant_order(self).cmp(&variant_order(other)),
+        }
+    }
 }
 
 impl Value {

@@ -94,6 +94,8 @@ pub async fn start(config: Config) -> std::result::Result<(), Box<dyn std::error
         wal.clone(),
     ));
 
+    executor.rebuild_indexes();
+
     let addr = config.addr();
     let listener = TcpListener::bind(&addr).await?;
     info!("srrdb listening on {addr}");

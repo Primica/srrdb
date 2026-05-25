@@ -22,7 +22,7 @@ authentication, and on-disk persistence — no MySQL dependency.
 - Built-in MySQL wire protocol client (`--client` flag)
 - Interactive REPL for in-process testing
 - Concurrent connections via Tokio async
-- Full SQL support: CREATE/DROP TABLE, CREATE/DROP DATABASE, INSERT, SELECT, DELETE, UPDATE, USE, SHOW, DESCRIBE/DESC
+- Full SQL support: CREATE/DROP TABLE, CREATE/DROP DATABASE, INSERT, SELECT, DELETE, UPDATE, USE, SHOW, DESCRIBE/DESC, CREATE/DROP INDEX
 - WHERE with comparison operators, AND/OR, LIKE, BETWEEN, IN, IS NULL
 - ORDER BY (ASC/DESC), LIMIT, OFFSET
 - Database management: CREATE DATABASE, DROP DATABASE, USE, SHOW DATABASES, SHOW TABLES
@@ -180,6 +180,23 @@ srrdb (root@blog)> schema
 - Column options: `AUTO_INCREMENT`, `PRIMARY KEY`, `DEFAULT <expr>`, `FOREIGN KEY` (accepted,
   constraints not enforced)
 - `DESCRIBE <table>` / `DESC <table>` — show column metadata (Field, Type, Null, Key, Default, Extra)
+- `CREATE INDEX <name> ON <table> (<col>, ...)` — create a B-tree index
+- `CREATE INDEX <name> ON <table> USING BTREE (<col>, ...)` — explicit B-tree index
+- `DROP INDEX <name>` — drop an index
+
+### Indexes
+
+Indexes speed up `WHERE col = value` queries by avoiding full table scans:
+
+| Index type | Lookup | Range scan | Prefix scan |
+|-----------|--------|------------|-------------|
+| **B-tree** (default) | O(log n) | O(log n + k) | O(log n + k) |
+| **Hash** (USING HASH) | O(1) avg | — | — |
+
+- Indexes are automatically maintained on INSERT, UPDATE, DELETE
+- Composite indexes (multiple columns) are supported
+- On server startup, indexes are rebuilt from persisted data
+- Index data is stored in `indexes/*.idx` files
 
 ### Data Manipulation
 
@@ -202,8 +219,9 @@ srrdb (root@blog)> schema
 
 Data is stored on disk in the configured `data_dir` (default: `./data/`):
 - `srrdb.wal` — Write-Ahead Log for crash recovery
-- `catalog.srrdb` — table schemas (bincode checkpoint)
+- `catalog.srrdb` — table schemas + index definitions (bincode checkpoint)
 - `tables/*.srrdb` — table data, one file per table (bincode checkpoint)
+- `indexes/*.idx` — index data (B-tree / Hash), rebuilt on startup
 
 **Write-Ahead Log:** Every mutation (CREATE, INSERT, DELETE, UPDATE, DROP) is
 appended to the WAL before being applied. On restart, the WAL is replayed to

@@ -309,5 +309,93 @@ async fn test_all_features() {
 
     // Switch back to srrdb for cleanup and remaining tests
     conn.query_drop("USE srrdb").await.unwrap();
+
+    // ===== CREATE INDEX =====
+    conn.query_drop("CREATE TABLE idx_test (id INT, name TEXT, price DOUBLE)")
+        .await
+        .unwrap();
+    conn.query_drop("INSERT INTO idx_test VALUES (1, 'Alice', 10.0)")
+        .await
+        .unwrap();
+    conn.query_drop("INSERT INTO idx_test VALUES (2, 'Bob', 20.0)")
+        .await
+        .unwrap();
+    conn.query_drop("INSERT INTO idx_test VALUES (3, 'Charlie', 10.0)")
+        .await
+        .unwrap();
+
+    // Create B-tree index
+    conn.query_drop("CREATE INDEX idx_name ON idx_test (name)")
+        .await
+        .expect("CREATE INDEX failed");
+
+    // Query using indexed column
+    let rows: Vec<(i32, String, f64)> = conn
+        .query("SELECT * FROM idx_test WHERE name = 'Bob'")
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].1, "Bob");
+
+    // Hash index
+    conn.query_drop("CREATE INDEX idx_price ON idx_test USING BTREE (price)")
+        .await
+        .expect("CREATE INDEX failed");
+
+    // Query using hash-indexed column
+    let rows: Vec<(i32, String, f64)> = conn
+        .query("SELECT * FROM idx_test WHERE price = 10.0")
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+
+    // Verify index still works after inserts
+    conn.query_drop("INSERT INTO idx_test VALUES (4, 'Diana', 30.0)")
+        .await
+        .unwrap();
+    let rows: Vec<String> = conn
+        .query("SELECT name FROM idx_test WHERE name = 'Diana'")
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0], "Diana");
+
+    // Verify index still works after updates
+    conn.query_drop("UPDATE idx_test SET name = 'Bobby' WHERE id = 2")
+        .await
+        .unwrap();
+    let rows: Vec<String> = conn
+        .query("SELECT name FROM idx_test WHERE name = 'Bobby'")
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0], "Bobby");
+
+    // Old index entry should be gone
+    let rows: Vec<String> = conn
+        .query("SELECT name FROM idx_test WHERE name = 'Bob'")
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 0);
+
+    // Verify index works after delete
+    conn.query_drop("DELETE FROM idx_test WHERE id = 3")
+        .await
+        .unwrap();
+    let rows: Vec<(i32, String, f64)> = conn
+        .query("SELECT * FROM idx_test WHERE price = 10.0")
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].1, "Alice");
+
+    // DROP INDEX
+    conn.query_drop("DROP INDEX idx_name")
+        .await
+        .expect("DROP INDEX failed");
+
+    // Cleanup
+    conn.query_drop("DROP TABLE idx_test").await.unwrap();
+
     drop(conn);
 }

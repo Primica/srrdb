@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::engine::index::IndexDef;
 use crate::engine::types::Column;
 
 fn normalize(name: &str) -> String {
@@ -24,6 +25,7 @@ pub struct Catalog {
 pub struct DatabaseDef {
     pub name: String,
     pub tables: HashMap<String, TableDef>,
+    pub indexes: HashMap<String, Vec<IndexDef>>,
 }
 
 impl Catalog {
@@ -34,9 +36,13 @@ impl Catalog {
             DatabaseDef {
                 name: "srrdb".to_string(),
                 tables: HashMap::new(),
+                indexes: HashMap::new(),
             },
         );
-        Catalog { databases, sequences: HashMap::new() }
+        Catalog {
+            databases,
+            sequences: HashMap::new(),
+        }
     }
 
     pub fn get_database(&self, name: &str) -> Option<&DatabaseDef> {
@@ -48,10 +54,13 @@ impl Catalog {
     }
 
     pub fn create_database(&mut self, name: &str) {
-        self.databases.entry(normalize(name)).or_insert(DatabaseDef {
-            name: name.to_string(),
-            tables: HashMap::new(),
-        });
+        self.databases
+            .entry(normalize(name))
+            .or_insert(DatabaseDef {
+                name: name.to_string(),
+                tables: HashMap::new(),
+                indexes: HashMap::new(),
+            });
     }
 
     pub fn database_exists(&self, name: &str) -> bool {
@@ -85,6 +94,7 @@ impl Catalog {
                 columns,
             },
         );
+        db.indexes.entry(tn.clone()).or_default();
         self.sequences.insert(tn, 1);
         Ok(())
     }
@@ -99,6 +109,7 @@ impl Catalog {
         db.tables
             .remove(&tn)
             .ok_or_else(|| format!("Unknown table: {table_name}"))?;
+        db.indexes.remove(&tn);
         self.sequences.remove(&tn);
         Ok(())
     }
@@ -125,5 +136,76 @@ impl Catalog {
             .get(&normalize(db_name))
             .and_then(|db| db.tables.get(&normalize(table_name)))
             .is_some()
+    }
+
+    pub fn create_index(
+        &mut self,
+        db_name: &str,
+        index_def: IndexDef,
+    ) -> Result<(), String> {
+        let tn = normalize(&index_def.table_name);
+        let db = self
+            .databases
+            .get_mut(&normalize(db_name))
+            .ok_or_else(|| format!("Unknown database: {db_name}"))?;
+
+        if !db.tables.contains_key(&tn) {
+            return Err(format!("Unknown table: {}", index_def.table_name));
+        }
+
+        let indexes = db.indexes.entry(tn).or_default();
+        if indexes.iter().any(|i| i.name.eq_ignore_ascii_case(&index_def.name)) {
+            return Err(format!("Index '{}' already exists", index_def.name));
+        }
+
+        indexes.push(index_def);
+        Ok(())
+    }
+
+    pub fn drop_index(
+        &mut self,
+        db_name: &str,
+        index_name: &str,
+        table_name: &str,
+    ) -> Result<IndexDef, String> {
+        let tn = normalize(table_name);
+        let db = self
+            .databases
+            .get_mut(&normalize(db_name))
+            .ok_or_else(|| format!("Unknown database: {db_name}"))?;
+
+        let indexes = db
+            .indexes
+            .get_mut(&tn)
+            .ok_or_else(|| format!("No indexes on table '{table_name}'"))?;
+
+        let pos = indexes
+            .iter()
+            .position(|i| i.name.eq_ignore_ascii_case(index_name))
+            .ok_or_else(|| format!("Unknown index: {index_name}"))?;
+
+        Ok(indexes.remove(pos))
+    }
+
+    pub fn get_table_indexes(&self, db_name: &str, table_name: &str) -> Vec<IndexDef> {
+        let tn = normalize(table_name);
+        self.databases
+            .get(&normalize(db_name))
+            .and_then(|db| db.indexes.get(&tn))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn get_index(&self, db_name: &str, table_name: &str, index_name: &str) -> Option<IndexDef> {
+        let tn = normalize(table_name);
+        self.databases
+            .get(&normalize(db_name))
+            .and_then(|db| db.indexes.get(&tn))
+            .and_then(|indexes| {
+                indexes
+                    .iter()
+                    .find(|i| i.name.eq_ignore_ascii_case(index_name))
+                    .cloned()
+            })
     }
 }
